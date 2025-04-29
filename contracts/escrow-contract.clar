@@ -1,15 +1,20 @@
-;; TradeSecure: Escrow Contract with Token Support
-;; Physical goods escrow system with tracking
+;; TradeSecure: Escrow Contract with Oracle Integration
+;; Physical goods escrow system with advanced tracking
 
 ;; Import traits
 (use-trait sip-010-trait 'SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE.sip-010-trait-ft-standard.sip-010-trait)
+(use-trait oracle-trait 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM.oracle-trait.oracle-trait)
 
 ;; Error codes
 (define-constant ERR-NOT-AUTHORIZED (err u100))
 (define-constant ERR-ESCROW-NOT-FOUND (err u101))
 (define-constant ERR-INVALID-STATE (err u102))
+(define-constant ERR-ALREADY-INITIALIZED (err u103))
 (define-constant ERR-ESCROW-EXPIRED (err u104))
+(define-constant ERR-DEADLINE-PASSED (err u105))
+(define-constant ERR-INSUFFICIENT-PAYMENT (err u106))
 (define-constant ERR-INVALID-TOKEN (err u107))
+(define-constant ERR-UNAUTHORIZED-ORACLE (err u108))
 
 ;; Escrow state constants
 (define-constant STATE-CREATED u0)
@@ -41,8 +46,14 @@
     expiration-time: uint,
     delivery-confirmation-time: (optional uint),
     dispute-resolution-time: (optional uint),
+    oracle: principal,
     metadata: (optional (string-utf8 1000))
   }
+)
+
+(define-map oracle-authorizations
+  { oracle: principal }
+  { authorized: bool }
 )
 
 (define-data-var last-escrow-id uint u0)
@@ -57,20 +68,47 @@
   (- amount (calculate-fee amount))
 )
 
+(define-private (is-authorized-oracle (oracle principal))
+  (default-to false (get authorized (map-get? oracle-authorizations { oracle: oracle })))
+)
+
+(define-private (is-escrow-expired (escrow-id uint))
+  (let (
+    (escrow (unwrap! (map-get? escrows { escrow-id: escrow-id }) false))
+    (current-time block-height)
+  )
+    (> current-time (get expiration-time escrow))
+  )
+)
+
+(define-private (validate-escrow-state (escrow-id uint) (expected-state uint))
+  (let (
+    (escrow (unwrap! (map-get? escrows { escrow-id: escrow-id }) ERR-ESCROW-NOT-FOUND))
+  )
+    (asserts! (is-eq (get state escrow) expected-state) ERR-INVALID-STATE)
+    (asserts! (not (is-escrow-expired escrow-id)) ERR-ESCROW-EXPIRED)
+    (ok escrow)
+  )
+)
+
 ;; Public functions - Escrow Creation and Management
 
-;; Initialize a new STX escrow
+;; Initialize a new escrow
 (define-public (create-escrow 
   (buyer principal) 
   (amount uint) 
   (description (string-utf8 500)) 
   (expiration-blocks uint)
+  (oracle principal)
 )
   (let (
     (new-escrow-id (+ (var-get last-escrow-id) u1))
     (current-time block-height)
     (expiration-time (+ current-time expiration-blocks))
   )
+    ;; Validate oracle authorization
+    (asserts! (is-authorized-oracle oracle) ERR-UNAUTHORIZED-ORACLE)
+    
     ;; Create the escrow
     (map-set escrows
       { escrow-id: new-escrow-id }
@@ -86,6 +124,7 @@
         expiration-time: expiration-time,
         delivery-confirmation-time: none,
         dispute-resolution-time: none,
+        oracle: oracle,
         metadata: none
       }
     )
@@ -98,19 +137,23 @@
   )
 )
 
-;; Create an escrow with token payment
+;; Create an escrow with SIP-010 token payment
 (define-public (create-token-escrow 
   (buyer principal) 
   (amount uint) 
   (token-contract principal)
   (description (string-utf8 500)) 
   (expiration-blocks uint)
+  (oracle principal)
 )
   (let (
     (new-escrow-id (+ (var-get last-escrow-id) u1))
     (current-time block-height)
     (expiration-time (+ current-time expiration-blocks))
   )
+    ;; Validate oracle authorization
+    (asserts! (is-authorized-oracle oracle) ERR-UNAUTHORIZED-ORACLE)
+    
     ;; Create the escrow
     (map-set escrows
       { escrow-id: new-escrow-id }
@@ -126,6 +169,7 @@
         expiration-time: expiration-time,
         delivery-confirmation-time: none,
         dispute-resolution-time: none,
+        oracle: oracle,
         metadata: none
       }
     )
@@ -141,40 +185,11 @@
 ;; Fund an escrow with STX
 (define-public (fund-escrow (escrow-id uint))
   (let (
-    (escrow (unwrap! (map-get? escrows { escrow-id: escrow-id }) ERR-ESCROW-NOT-FOUND))
+    (escrow (try! (validate-escrow-state escrow-id STATE-CREATED)))
     (amount (get amount escrow))
   )
     ;; Check sender is the buyer
     (asserts! (is-eq tx-sender (get buyer escrow)) ERR-NOT-AUTHORIZED)
-    
-    ;; Check escrow is in created state
-    (asserts! (is-eq (get state escrow) STATE-CREATED) ERR-INVALID-STATE)
-    
-    ;; Transfer the STX to the contract
-    (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
-    
-    ;; Update escrow state
-    (map-set escrows
-      { escrow-id: escrow-id }
-      (merge escrow { state: STATE-FUNDED })
-    )
-    
-    (ok true)
-  )
-)
-
-;; Fund an escrow with tokens
-(define-public (fund-token-escrow (escrow-id uint) (token <sip-010-trait>))
-  (let (
-    (escrow (unwrap! (map-get? escrows { escrow-id: escrow-id }) ERR-ESCROW-NOT-FOUND))
-    (amount (get amount escrow))
-    (token-contract (unwrap! (get token-contract escrow) ERR-INVALID-TOKEN))
-  )
-    ;; Check sender is the buyer
-    (asserts! (is-eq tx-sender (get buyer escrow)) ERR-NOT-AUTHORIZED)
-    
-    ;; Check escrow is in created state
-    (asserts! (is-eq (get state escrow) STATE-CREATED) ERR-INVALID-STATE)
     
     ;; Verify correct token is being used
     (asserts! (is-eq (contract-of token) token-contract) ERR-INVALID-TOKEN)
@@ -195,13 +210,10 @@
 ;; Mark escrow as shipped
 (define-public (ship-escrow (escrow-id uint) (tracking-number (string-ascii 100)))
   (let (
-    (escrow (unwrap! (map-get? escrows { escrow-id: escrow-id }) ERR-ESCROW-NOT-FOUND))
+    (escrow (try! (validate-escrow-state escrow-id STATE-FUNDED)))
   )
     ;; Check sender is the seller
     (asserts! (is-eq tx-sender (get seller escrow)) ERR-NOT-AUTHORIZED)
-    
-    ;; Check escrow is in funded state
-    (asserts! (is-eq (get state escrow) STATE-FUNDED) ERR-INVALID-STATE)
     
     ;; Update escrow state
     (map-set escrows
@@ -216,15 +228,15 @@
   )
 )
 
-;; Manually confirm delivery 
-(define-public (confirm-delivery (escrow-id uint))
+;; Confirm delivery via oracle
+(define-public (confirm-delivery (escrow-id uint) (oracle-data (string-utf8 1000)))
   (let (
     (escrow (unwrap! (map-get? escrows { escrow-id: escrow-id }) ERR-ESCROW-NOT-FOUND))
   )
-    ;; Check sender is the buyer
-    (asserts! (is-eq tx-sender (get buyer escrow)) ERR-NOT-AUTHORIZED)
+    ;; Check sender is the authorized oracle
+    (asserts! (is-eq tx-sender (get oracle escrow)) ERR-NOT-AUTHORIZED)
     
-    ;; Check escrow is in shipped state
+    ;; Check escrow is in the correct state
     (asserts! (is-eq (get state escrow) STATE-SHIPPED) ERR-INVALID-STATE)
     
     ;; Update escrow state
@@ -232,7 +244,8 @@
       { escrow-id: escrow-id }
       (merge escrow { 
         state: STATE-DELIVERED,
-        delivery-confirmation-time: (some block-height)
+        delivery-confirmation-time: (some block-height),
+        metadata: (some oracle-data)
       })
     )
     
@@ -240,8 +253,154 @@
   )
 )
 
-;; Complete STX escrow and release funds to seller
+;; Complete escrow and release funds to seller
 (define-public (complete-escrow (escrow-id uint))
+  (let (
+    (escrow (try! (validate-escrow-state escrow-id STATE-DELIVERED)))
+    (amount (get amount escrow))
+    (seller (get seller escrow))
+    (fee (calculate-fee amount))
+    (seller-amount (calculate-seller-amount amount))
+    (token-contract (get token-contract escrow))
+  )
+    ;; Check sender is the buyer or this is an automatic completion after delivery confirmation
+    (asserts! (or 
+      (is-eq tx-sender (get buyer escrow))
+      ;; Automatic completion after 3 days (432 blocks, approx. 3 days at 10-minute blocks)
+      (match (get delivery-confirmation-time escrow)
+        confirmation-time (> block-height (+ confirmation-time u432))
+        false
+      )
+    ) ERR-NOT-AUTHORIZED)
+    
+    ;; Release funds based on whether it's an STX or token escrow
+    (match token-contract
+      token-principal
+        ;; It's a token escrow - use direct token principal instead of registry
+        (begin
+          (print {
+            action: "token-release-simulation",
+            token: token-principal,
+            fee-amount: fee,
+            fee-to: PLATFORM-ADDRESS,
+            seller-amount: seller-amount,
+            seller: seller
+          })
+          
+          ;; Update escrow state
+          (map-set escrows
+            { escrow-id: escrow-id }
+            (merge escrow { state: STATE-COMPLETED })
+          )
+          
+          (ok true)
+        )
+      ;; It's an STX escrow
+      (as-contract
+        (begin
+          ;; Send fee to platform
+          (try! (stx-transfer? fee tx-sender PLATFORM-ADDRESS))
+          ;; Send remaining to seller
+          (try! (stx-transfer? seller-amount tx-sender seller))
+          
+          ;; Update escrow state
+          (map-set escrows
+            { escrow-id: escrow-id }
+            (merge escrow { state: STATE-COMPLETED })
+          )
+          
+          (ok true)
+        )
+      )
+    )
+  )
+)
+
+;; Initiate dispute
+(define-public (dispute-escrow (escrow-id uint) (dispute-reason (string-utf8 500)))
+  (let (
+    (escrow (unwrap! (map-get? escrows { escrow-id: escrow-id }) ERR-ESCROW-NOT-FOUND))
+    (current-state (get state escrow))
+  )
+    ;; Check sender is the buyer
+    (asserts! (is-eq tx-sender (get buyer escrow)) ERR-NOT-AUTHORIZED)
+    
+    ;; Check escrow is in a disputeable state
+    (asserts! (or 
+      (is-eq current-state STATE-FUNDED) 
+      (is-eq current-state STATE-SHIPPED)
+      (is-eq current-state STATE-DELIVERED)
+    ) ERR-INVALID-STATE)
+    
+    ;; Update escrow state
+    (map-set escrows
+      { escrow-id: escrow-id }
+      (merge escrow { 
+        state: STATE-DISPUTED,
+        dispute-resolution-time: (some block-height),
+        metadata: (some dispute-reason)
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Resolve dispute and refund buyer
+(define-public (resolve-dispute-refund (escrow-id uint))
+  (let (
+    (escrow (unwrap! (map-get? escrows { escrow-id: escrow-id }) ERR-ESCROW-NOT-FOUND))
+    (amount (get amount escrow))
+    (buyer (get buyer escrow))
+    (token-contract (get token-contract escrow))
+  )
+    ;; Check sender is the contract owner (arbiter)
+    (asserts! (is-eq tx-sender (var-get contract-owner)) ERR-NOT-AUTHORIZED)
+    
+    ;; Check escrow is in disputed state
+    (asserts! (is-eq (get state escrow) STATE-DISPUTED) ERR-INVALID-STATE)
+    
+    ;; Handle based on payment type
+    (match token-contract
+      token-principal
+        ;; For token escrows - in production, would call the token contract
+        (begin
+          (print {
+            action: "token-refund-simulation",
+            token: token-principal,
+            amount: amount,
+            buyer: buyer
+          })
+          
+          ;; Update escrow state
+          (map-set escrows
+            { escrow-id: escrow-id }
+            (merge escrow { state: STATE-REFUNDED })
+          )
+          
+          (ok true)
+        )
+      ;; For STX escrows
+      (as-contract
+        (begin
+          ;; Refund full amount to buyer
+          (try! (stx-transfer? amount tx-sender buyer))
+          
+          ;; Update escrow state
+          (map-set escrows
+            { escrow-id: escrow-id }
+            (merge escrow { state: STATE-REFUNDED })
+          )
+          
+          (ok true)
+        )
+      )
+    )
+  )
+)
+
+;; Resolve dispute in seller's favor
+(define-public (resolve-dispute-release (escrow-id uint))
   (let (
     (escrow (unwrap! (map-get? escrows { escrow-id: escrow-id }) ERR-ESCROW-NOT-FOUND))
     (amount (get amount escrow))
@@ -250,44 +409,92 @@
     (seller-amount (calculate-seller-amount amount))
     (token-contract (get token-contract escrow))
   )
-    ;; Check sender is the buyer
-    (asserts! (is-eq tx-sender (get buyer escrow)) ERR-NOT-AUTHORIZED)
+    ;; Check sender is the contract owner (arbiter)
+    (asserts! (is-eq tx-sender (var-get contract-owner)) ERR-NOT-AUTHORIZED)
     
-    ;; Check escrow is in delivered state
-    (asserts! (is-eq (get state escrow) STATE-DELIVERED) ERR-INVALID-STATE)
+    ;; Check escrow is in disputed state
+    (asserts! (is-eq (get state escrow) STATE-DISPUTED) ERR-INVALID-STATE)
     
-    ;; Release funds based on whether it's an STX or token escrow
-    (if (is-some token-contract)
-      ;; It's a token escrow - would call token contract here
-      (begin
-        ;; Placeholder for token transfer
-        (print "Token transfer would happen here")
-        (ok true)
-      )
-      ;; It's an STX escrow
-      (begin
-        ;; Send fee to platform
-        (try! (as-contract (stx-transfer? fee tx-sender PLATFORM-ADDRESS)))
-        ;; Send remaining to seller
-        (try! (as-contract (stx-transfer? seller-amount tx-sender seller)))
-        
-        ;; Update escrow state
-        (map-set escrows
-          { escrow-id: escrow-id }
-          (merge escrow { state: STATE-COMPLETED })
+    ;; Handle based on payment type
+    (match token-contract
+      token-principal
+        ;; For token escrows - in production, would call the token contract
+        (begin
+          (print {
+            action: "token-release-simulation",
+            token: token-principal,
+            fee-amount: fee,
+            fee-to: PLATFORM-ADDRESS,
+            seller-amount: seller-amount,
+            seller: seller
+          })
+          
+          ;; Update escrow state
+          (map-set escrows
+            { escrow-id: escrow-id }
+            (merge escrow { state: STATE-COMPLETED })
+          )
+          
+          (ok true)
         )
-        
-        (ok true)
+      ;; For STX escrows
+      (as-contract
+        (begin
+          ;; Send fee to platform
+          (try! (stx-transfer? fee tx-sender PLATFORM-ADDRESS))
+          ;; Send remaining to seller
+          (try! (stx-transfer? seller-amount tx-sender seller))
+          
+          ;; Update escrow state
+          (map-set escrows
+            { escrow-id: escrow-id }
+            (merge escrow { state: STATE-COMPLETED })
+          )
+          
+          (ok true)
+        )
       )
     )
   )
 )
+
+;; Cancel escrow (before it's funded)
+(define-public (cancel-escrow (escrow-id uint))
+  (let (
+    (escrow (unwrap! (map-get? escrows { escrow-id: escrow-id }) ERR-ESCROW-NOT-FOUND))
+  )
+    ;; Check escrow is in created state
+    (asserts! (is-eq (get state escrow) STATE-CREATED) ERR-INVALID-STATE)
+    
+    ;; Check sender is the seller
+    (asserts! (is-eq tx-sender (get seller escrow)) ERR-NOT-AUTHORIZED)
+    
+    ;; Update escrow state
+    (map-set escrows
+      { escrow-id: escrow-id }
+      (merge escrow { state: STATE-CANCELED })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Admin functions
 
 ;; Set contract owner
 (define-public (set-contract-owner (new-owner principal))
   (begin
     (asserts! (is-eq tx-sender (var-get contract-owner)) ERR-NOT-AUTHORIZED)
     (var-set contract-owner new-owner)
+    (ok true)
+  )
+)
+
+;; Authorize an oracle
+(define-public (authorize-oracle (oracle principal) (authorized bool))
+  (begin
+    (asserts! (is-eq tx-sender (var-get contract-owner)) ERR-NOT-AUTHORIZED)
+    (map-set oracle-authorizations { oracle: oracle } { authorized: authorized })
     (ok true)
   )
 )
@@ -307,6 +514,11 @@
 ;; Get contract owner
 (define-read-only (get-contract-owner)
   (var-get contract-owner)
+)
+
+;; Check if an oracle is authorized
+(define-read-only (is-oracle-authorized (oracle principal))
+  (is-authorized-oracle oracle)
 )
 
 ;; Calculate platform fee for a given amount
