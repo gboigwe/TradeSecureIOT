@@ -1,5 +1,6 @@
 ;; SIP-010 Fungible Token Standard
 ;; This trait defines the standard interface for fungible tokens on Stacks.
+;; https://github.com/stacksgov/sips/blob/main/sips/sip-010/sip-010-fungible-token-standard.md
 
 (define-trait sip-010-trait
   (

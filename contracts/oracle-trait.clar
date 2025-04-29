@@ -46,3 +46,5 @@
     )
   )
 )
+
+;; Export the trait for use in other contracts
