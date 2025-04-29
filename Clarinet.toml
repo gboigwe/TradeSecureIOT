@@ -4,6 +4,10 @@ authors = ["Gbolahan Akande"]
 description = ""
 telemetry = true
 requirements = []
+[contracts.sip-010-trait]
+path = "contracts/sip-010-trait.clar"
+depends_on = []
+
 [contracts.escrow-contract]
 path = "contracts/escrow-contract.clar"
 depends_on = []
