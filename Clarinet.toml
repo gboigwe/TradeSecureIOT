@@ -8,6 +8,10 @@ requirements = []
 path = "contracts/sip-010-trait.clar"
 depends_on = []
 
+[contracts.oracle-trait]
+path = "contracts/oracle-trait.clar"
+depends_on = []
+
 [contracts.escrow-contract]
 path = "contracts/escrow-contract.clar"
 depends_on = []
