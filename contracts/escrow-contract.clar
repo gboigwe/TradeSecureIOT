@@ -44,7 +44,7 @@
     delivery-confirmation-time: (optional uint),
     dispute-resolution-time: (optional uint),
     oracle: principal,
-    metadata: (optional (string-utf8 1000))
+    metadata: (optional (string-ascii 1000))  ;; Changed from string-utf8 to string-ascii
   }
 )
 
@@ -255,8 +255,8 @@
   )
 )
 
-;; Confirm delivery via oracle
-(define-public (confirm-delivery (escrow-id uint) (oracle-data (string-utf8 1000)))
+;; Confirm delivery via oracle - now using string-ascii to match the map definition
+(define-public (confirm-delivery (escrow-id uint) (oracle-data (string-ascii 1000)))
   (let (
     (escrow (unwrap! (map-get? escrows { escrow-id: escrow-id }) ERR-ESCROW-NOT-FOUND))
   )
@@ -343,8 +343,8 @@
   )
 )
 
-;; Initiate dispute
-(define-public (dispute-escrow (escrow-id uint) (dispute-reason (string-utf8 500)))
+;; Initiate dispute - changed to use string-ascii to match the metadata field type
+(define-public (dispute-escrow (escrow-id uint) (dispute-reason (string-ascii 500)))
   (let (
     (escrow (unwrap! (map-get? escrows { escrow-id: escrow-id }) ERR-ESCROW-NOT-FOUND))
     (current-state (get state escrow))
