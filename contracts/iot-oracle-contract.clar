@@ -174,3 +174,43 @@
     (ok true)
   )
 )
+
+;; Initialize package tracking for an escrow
+(define-public (init-package-tracking
+  (tracking-id (string-ascii 100))
+  (escrow-id uint)
+  (buyer principal)
+  (device-ids (list 10 (string-ascii 64)))
+  (destination (string-ascii 256))
+  (destination-lat int)
+  (destination-lng int)
+)
+  (let (
+    (existing-tracking (map-get? package-trackings { tracking-id: tracking-id }))
+  )
+    ;; Check if tracking already exists
+    (asserts! (is-none existing-tracking) ERR-ALREADY-REGISTERED)
+    
+    ;; Create the tracking record
+    (map-set package-trackings
+      { tracking-id: tracking-id }
+      {
+        escrow-id: escrow-id,
+        seller: tx-sender,
+        buyer: buyer,
+        device-ids: device-ids,
+        destination: destination,
+        destination-lat: destination-lat,
+        destination-lng: destination-lng,
+        creation-time: block-height,
+        status: STATUS-PENDING,
+        last-updated: block-height,
+        verification-count: u0,
+        delivery-time: none,
+        metadata: none
+      }
+    )
+    
+    (ok true)
+  )
+)
