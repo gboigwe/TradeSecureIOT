@@ -75,3 +75,54 @@
     metadata: (optional (string-ascii 500))
   }
 )
+
+;; This avoids complex math that's hard to type-check in Clarity
+(define-private (is-within-distance (lat1 int) (lng1 int) (lat2 int) (lng2 int) (max-distance uint))
+  ;; Simple bounding box check for efficiency
+  (let (
+    ;; Convert lat/lng to a simpler scale for comparison
+    (lat-diff-abs (if (> lat1 lat2) (- lat1 lat2) (- lat2 lat1)))
+    (lng-diff-abs (if (> lng1 lng2) (- lng1 lng2) (- lng2 lng1)))
+    
+    ;; Very rough conversion of meters to coordinate units
+    ;; This is an approximation but works well enough for short distances
+    (max-distance-in-coord-units (to-int (* max-distance u9))) ;; ~0.000009 per meter
+  )
+    ;; If either difference exceeds our maximum, it's definitely too far
+    (if (> lat-diff-abs max-distance-in-coord-units)
+      false
+      (if (> lng-diff-abs max-distance-in-coord-units)
+        false
+        ;; For distances that might be close, do a slightly better check
+        ;; Using squared distance (avoids square root)
+        (let (
+          (squared-distance (+ (* lat-diff-abs lat-diff-abs) (* lng-diff-abs lng-diff-abs)))
+          (squared-max (* max-distance-in-coord-units max-distance-in-coord-units))
+        )
+          (<= squared-distance squared-max)
+        )
+      )
+    )
+  )
+)
+
+;; Check if a device is registered and active
+(define-private (is-device-active (device-id (string-ascii 64)))
+  (match (map-get? devices { device-id: device-id })
+    device (get active device)
+    false
+  )
+)
+
+;; Check if data is recent enough
+(define-private (is-data-recent (timestamp uint))
+  (let (
+    (current-time (default-to u0 (get-block-info? time block-height)))
+  )
+    ;; Safely handle potential wraparound
+    (if (> current-time timestamp)
+      (<= (- current-time timestamp) TIMESTAMP-THRESHOLD)
+      false
+    )
+  )
+)
