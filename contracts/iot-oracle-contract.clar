@@ -27,3 +27,51 @@
 (define-data-var contract-owner principal tx-sender)
 (define-data-var escrow-contract principal 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM.escrow-contract)
 (define-data-var last-verification-id uint u0)
+
+;; Data maps for storing device and package information
+(define-map devices
+  { device-id: (string-ascii 64) }
+  { 
+    owner: principal,
+    device-type: (string-ascii 20),
+    registration-time: uint,
+    active: bool,
+    public-key: (buff 33),
+    metadata: (optional (string-ascii 500))
+  }
+)
+
+(define-map package-trackings
+  { tracking-id: (string-ascii 100) }
+  {
+    escrow-id: uint,
+    seller: principal,
+    buyer: principal,
+    device-ids: (list 10 (string-ascii 64)),
+    destination: (string-ascii 256),
+    destination-lat: int,
+    destination-lng: int,
+    creation-time: uint,
+    status: uint,
+    last-updated: uint,
+    verification-count: uint,
+    delivery-time: (optional uint),
+    metadata: (optional (string-ascii 1000))
+  }
+)
+
+(define-map verification-records
+  { tracking-id: (string-ascii 100), verification-id: uint }
+  {
+    device-id: (string-ascii 64),
+    timestamp: uint,
+    blockchain-time: uint,
+    lat: int,
+    lng: int,
+    accuracy: uint,
+    temperature: (optional int),
+    humidity: (optional uint),
+    impact: (optional uint),
+    metadata: (optional (string-ascii 500))
+  }
+)
