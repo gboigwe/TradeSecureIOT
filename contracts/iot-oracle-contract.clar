@@ -126,3 +126,51 @@
     )
   )
 )
+
+;; Register a new IoT device
+(define-public (register-device 
+  (device-id (string-ascii 64))
+  (device-type (string-ascii 20))
+  (public-key (buff 33))
+  (metadata (optional (string-ascii 500)))
+)
+  (let (
+    (existing-device (map-get? devices { device-id: device-id }))
+  )
+    ;; Check if device already exists
+    (asserts! (is-none existing-device) ERR-ALREADY-REGISTERED)
+    
+    ;; Register the device
+    (map-set devices
+      { device-id: device-id }
+      { 
+        owner: tx-sender,
+        device-type: device-type,
+        registration-time: block-height,
+        active: true,
+        public-key: public-key,
+        metadata: metadata
+      }
+    )
+    
+    (ok device-id)
+  )
+)
+
+;; Set device status (active/inactive)
+(define-public (set-device-status (device-id (string-ascii 64)) (active bool))
+  (let (
+    (device (unwrap! (map-get? devices { device-id: device-id }) ERR-DEVICE-NOT-FOUND))
+  )
+    ;; Check if sender is owner
+    (asserts! (is-eq tx-sender (get owner device)) ERR-NOT-AUTHORIZED)
+    
+    ;; Update device status
+    (map-set devices
+      { device-id: device-id }
+      (merge device { active: active })
+    )
+    
+    (ok true)
+  )
+)
