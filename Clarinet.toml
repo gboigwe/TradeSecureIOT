@@ -4,16 +4,20 @@ authors = ["Gbolahan Akande"]
 description = ""
 telemetry = true
 requirements = []
-[contracts.sip-010-trait]
-path = "contracts/sip-010-trait.clar"
+[contracts.escrow-contract]
+path = "contracts/escrow-contract.clar"
+depends_on = []
+
+[contracts.iot-oracle-contract]
+path = "contracts/iot-oracle-contract.clar"
 depends_on = []
 
 [contracts.oracle-trait]
 path = "contracts/oracle-trait.clar"
 depends_on = []
 
-[contracts.escrow-contract]
-path = "contracts/escrow-contract.clar"
+[contracts.sip-010-trait]
+path = "contracts/sip-010-trait.clar"
 depends_on = []
 
 [repl]
